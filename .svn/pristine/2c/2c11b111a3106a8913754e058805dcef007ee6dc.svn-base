@@ -1,0 +1,521 @@
+package ca.uwaterloo.lab4_204_18;
+
+import graph.LineGraphView;
+
+import java.io.ByteArrayOutputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+
+import android.annotation.SuppressLint;
+import android.content.Context;
+import android.graphics.PointF;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
+import android.os.Bundle;
+import android.support.v4.app.Fragment;
+import android.support.v7.app.ActionBarActivity;
+import android.view.ContextMenu;
+import android.view.ContextMenu.ContextMenuInfo;
+import android.view.LayoutInflater;
+import android.view.Menu;
+import android.view.MenuItem;
+import android.view.View;
+import android.view.View.OnClickListener;
+import android.view.ViewGroup;
+import android.widget.Button;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+import ca.uwaterloo.mapper.InterceptPoint;
+import ca.uwaterloo.mapper.LineSegment;
+import ca.uwaterloo.mapper.MapLoader;
+import ca.uwaterloo.mapper.MapView;
+import ca.uwaterloo.mapper.NavigationalMap;
+import ca.uwaterloo.mapper.PositionListener;
+
+public class MainActivity extends ActionBarActivity {
+	//Declaration of required Layouts, Text views, Sensor managers and listeners,
+	//Buttons, Graph Views and Maps.
+	LinearLayout layout;
+	TextView accelz;
+	TextView direction;
+	TextView stepsText;
+	TextView arrived;
+	TextView instruction;
+	SensorManager sensorManager;
+	SensorEventListener accellistener;
+	SensorEventListener rotlistener;
+	Sensor accel;
+	Sensor rot;
+	Button reset;
+	LineGraphView graph;
+	MapView mapView;
+	NavigationalMap map;
+	InputStream fileInputStream;
+	PositionListener positionlisten;
+	
+	//Global variable for the phone's orientation and steps taken as it needs to be accessed by multiple classes.
+	float[] orientation = new float[3];
+	
+	int stepnum=0;
+	float nstepnum = 0;
+	float estepnum = 0;
+	
+	byte[] bFile;
+	PointF[] pathArray;
+	
+    @SuppressLint("InlinedApi") @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
+        //Implements the linear layout and creates the text views, graphs, maps and buttons.
+        layout =  (LinearLayout) this.findViewById(R.id.container);
+        graph = new LineGraphView(getApplicationContext(), 100, Arrays.asList("z"));
+        mapView = new MapView( getApplicationContext() , 900 , 900 , 50 , 50);
+        accelz = new TextView(this);
+        direction = new TextView(this);
+        stepsText = new TextView(this);
+        instruction = new TextView(this);
+        arrived = new TextView(this);
+        reset = new Button(this);
+        fileInputStream = getResources().openRawResource(R.raw.labroompeninsula);
+        bFile = null;
+        
+        //Set the map required to the map view.
+        try {
+        	bFile = InputStreamToByte(fileInputStream);
+        } 
+        catch (IOException e1) {
+        	e1.printStackTrace();
+        }
+        try{
+        	FileOutputStream fos = openFileOutput("Lab-room-peninsula.svg", Context.MODE_PRIVATE);
+        	fos.write(bFile);
+        	fos.close();
+        }
+        catch(Exception e){
+        }
+        
+        map = MapLoader.loadMap(getFilesDir(), "Lab-room-peninsula.svg");;
+        mapView . setMap ( map );
+        
+        //Sets the text of the reset button.
+        reset.setText("Reset Steps");
+        
+        //Adds the graph button and text views to the layout.
+        layout.addView(graph);
+        graph.setVisibility(View.VISIBLE);        
+        layout.addView(accelz);
+        layout.addView(direction);
+        layout.addView(stepsText);
+        layout.addView(reset);
+        layout.addView(instruction);
+        layout.addView(mapView);
+        layout.addView(arrived);
+        
+        
+        //Creates the sensor managers and listeners for the acceleration and rotation sensor used to sense
+        //each step and heading.
+        sensorManager = (SensorManager) getSystemService(SENSOR_SERVICE);
+    	accellistener = new Acceleromoter();
+    	rotlistener = new RotationSensor();
+    	positionlisten = new PositionSensor();
+    	
+        accel = sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION);
+        rot = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR);
+        
+        sensorManager.registerListener(accellistener, accel, SensorManager.SENSOR_DELAY_FASTEST);
+        sensorManager.registerListener(rotlistener, rot, SensorManager.SENSOR_DELAY_FASTEST);
+        
+        registerForContextMenu (mapView);
+        mapView.addListener(positionlisten);
+        
+        
+        
+        //Sets a listener for the button to check for button clicks.
+        reset.setOnClickListener(new ResetButtonListener());
+        
+        if (savedInstanceState == null) {
+            getSupportFragmentManager().beginTransaction()
+                    .add(R.id.container, new PlaceholderFragment())
+                    .commit();
+        }
+        
+    }
+    @Override
+    public boolean onCreateOptionsMenu(Menu menu) {
+        
+        // Inflate the menu; this adds items to the action bar if it is present.
+        getMenuInflater().inflate(R.menu.main, menu);
+        return true;
+    }
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+        // Handle action bar item clicks here. The action bar will
+        // automatically handle clicks on the Home/Up button, so long
+        // as you specify a parent activity in AndroidManifest.xml.
+        int id = item.getItemId();
+        if (id == R.id.action_settings) {
+            return true;
+        }
+        return super.onOptionsItemSelected(item);
+    }
+    
+    // In your Activity :
+    @Override
+    public void onCreateContextMenu ( ContextMenu menu , View v , ContextMenuInfo menuInfo ) {
+    	super . onCreateContextMenu ( menu , v , menuInfo );
+    	mapView . onCreateContextMenu ( menu , v , menuInfo );
+    }
+    
+    @Override
+    public boolean onContextItemSelected ( MenuItem item ) {
+    	return super . onContextItemSelected ( item ) || mapView . onContextItemSelected ( item );
+    }
+    
+    private byte[] InputStreamToByte(InputStream is) throws IOException {
+
+    	ByteArrayOutputStream bytestream = new ByteArrayOutputStream();
+
+    	int ch;
+
+    	while ((ch = is.read()) != -1) {
+
+    		bytestream.write(ch);
+
+    	}
+
+    	byte imgdata[] = bytestream.toByteArray();
+
+    	bytestream.close();
+
+    	return imgdata;
+
+    }
+    
+    /**
+     * A placeholder fragment containing a simple view.
+     */
+    public static class PlaceholderFragment extends Fragment {
+        public PlaceholderFragment() {
+        }
+        @Override
+        public View onCreateView(LayoutInflater inflater, ViewGroup container,
+                Bundle savedInstanceState) {
+            View rootView = inflater.inflate(R.layout.fragment_main, container, false);
+            return rootView;
+            
+           
+            
+        }
+    }
+    
+    //Sets all step numbers back to 0.
+    private class ResetButtonListener implements OnClickListener {
+        @Override
+        public void onClick(View v) {
+            stepnum=0;
+            nstepnum=0;
+            estepnum=0;
+        }
+    };
+    
+    //Accelerometer class contains methods to implement everytime the sensor value changes.
+    public class Acceleromoter implements SensorEventListener{
+    	
+    	//Variable declaration and initialization used in step counter logic.
+    	float smoothedAccel=0;
+    	float pointToGraph[] = {0};
+    	boolean top = false;
+    	boolean bottom= false;
+    	int stage = 1;
+    	
+    	public void onAccuracyChanged(Sensor sensor, int accuracy) {
+    		}
+    	
+    	//Method that gets called whenever the sensor values change.
+    	//This is practically real time and is constantly being called.
+    	public void onSensorChanged (SensorEvent se) {
+    		
+    		
+    		//Sensor filter used to keep out background sensor noise and
+    		//'smoothens' the acceleration.
+    		smoothedAccel += (se.values[2] - smoothedAccel) / 50;
+    		
+    		
+    		//Step counter state machine
+    		switch(stage){
+    		
+    		case 1:
+    			if (smoothedAccel >= 0.3){
+        			stage=2;
+    			}
+    			break;
+    			
+    		case 2:
+    			if (smoothedAccel <= -0.3){
+        			stage=3;
+        		}
+    			break;
+    			
+    		case 3:
+    			
+    			//Add one to the step number and the appropriate amount in each direction.
+    			stepnum++;
+    			nstepnum = (float) (nstepnum + 1 * Math.cos(orientation[0]));
+        		estepnum = (float) (estepnum + 1 * Math.sin(orientation[0]));
+        		
+        		//Update the user point on the map relative to its current user point.
+        		//Adds steps in the correct direction to the user point
+        		//Direction is altered due to orientation of the map.
+        		//mapView.setUserPoint(mapView.getUserPoint().x + (float) Math.cos(orientation[0] - Math.PI/3), (float) (mapView.getUserPoint().y 
+        				//+ (float) Math.sin(orientation[0]) - Math.PI/3));
+        		
+        		if(orientation[0] >0){
+        			
+        			mapView.setUserPoint((float) (mapView.getUserPoint().x + ((float) Math.sin(orientation[0]) + Math.PI/6)), (float) (mapView.getUserPoint().y 
+            				- ((float) Math.cos(orientation[0] + Math.PI/6))));
+        		}
+        		
+        		else{
+        			
+        			mapView.setUserPoint((float) (mapView.getUserPoint().x - ((float) - Math.sin(orientation[0]) + Math.PI/6)), (float) (mapView.getUserPoint().y 
+            				- ((float) Math.cos(orientation[0] + Math.PI/6))));
+        		}
+        		
+        		//Updates the written instructions on every step.
+        		if(!(pathArray == null)){
+        			pathArray[0] = mapView.getUserPoint();
+        			instruction.setText(Instructions(pathArray));
+        		}
+    			stage=1;
+    			
+    			
+    			break;
+    			
+    		}
+    		
+    		//Displays an arrival message if the user is within a radius of the destination.
+    		if(mapView.getUserPoint().x != 0 && mapView.getUserPoint().y != 0){
+	    		
+	    		if(mapView.getUserPoint().x > mapView.getDestinationPoint().x - 0.5 && mapView.getUserPoint().x < mapView.getDestinationPoint().x + 0.5){
+	    			
+	    			if(mapView.getUserPoint().y > mapView.getDestinationPoint().y - 0.5 && mapView.getUserPoint().y < mapView.getDestinationPoint().y + 0.5){
+	        		
+		    			arrived.setText("You Have Arrived!");
+	    			}
+	    		}
+    		}
+    		
+    		//Displays the current smoothened acceleration and number of steps
+    		//in their respective text view.
+    		accelz.setText(String.format("Z: %f",smoothedAccel));
+    		stepsText.setText(String.format("# of Steps: %d \n ---displacement(steps)--- \n North:  %f \n East:  %f", stepnum, nstepnum, estepnum));
+    		
+    		//Graphs the smoothened acceleration and keeps in memory that graph point in order to make
+    		//comparisons with the next point.
+    		pointToGraph[0]=smoothedAccel;
+    		graph.addPoint(pointToGraph);
+    	}
+    	
+    	
+    	//Method that writes the written instructions to the text view.
+    	public String Instructions(PointF[] pathArray){
+    		
+    		String instructions = "";
+    		float diffX;
+    		float diffY;
+    		double mag;
+    		
+    		//Manipulation of current and previous coordinates to find slope, heading and magnitude
+    		//of distance between two points.
+    		for(int i = 1; i < pathArray.length; i++){
+    			
+    			
+    			diffY = pathArray[i].y - pathArray[i-1].y;
+    			diffX = pathArray[i].x - pathArray[i-1].x;
+    			
+    			mag = Math.sqrt(Math.pow((pathArray[i].y - pathArray[i-1].y),2) 
+    					+ Math.pow((pathArray[i].x - pathArray[i-1].x),2));
+    			
+    			if(diffY > 0 && diffX > 0){
+    				instructions = String.format("%s Walk %.3g steps in heading -1.05 and %.3g steps in heading 0.52 \n", instructions, diffY, diffX);
+    			}
+    			
+    			else if(diffY > 0 && diffX < 0){
+        			instructions = String.format("%s Walk %.3g steps in heading -1.05 and %.3g steps in heading -2.62 \n", instructions, diffY, diffX);
+        		}
+    			
+    			else if(diffY < 0 && diffX > 0){
+        			instructions = String.format("%s Walk %.3g steps in heading 2.09 and %.3g steps in heading 0.52 \n", instructions, diffY, diffX);
+        		}
+    			
+    			else{
+        			instructions = String.format("%s Walk %.3g steps in heading 2.09 and %.3g steps in heading -2.62 \n", instructions, diffY, diffX);
+        		}
+    			
+    		}
+    		
+    		
+    		return instructions;
+    	}
+    	
+    }
+  
+    //Rotation sensor class contains methods to implement everytime the sensor value changes.
+    public class RotationSensor implements SensorEventListener{
+    	
+    	
+    	public void onAccuracyChanged(Sensor sensor, int accuracy) {
+    		}
+    	
+    	
+    	
+    	//Method that gets called whenever the sensor values change.
+    	//This is practically real time and is constantly being called.
+    	@SuppressLint("NewApi")
+		public void onSensorChanged (SensorEvent se) {
+    		
+    		
+    		float[] R = new float[9];
+    		String radHeading = "unknwon";
+    		//Takes the rotation matrix from the sensor and converts it to a rotation vector.
+    		SensorManager.getRotationMatrixFromVector(R, se.values);
+    		//Takes the rotation vector the previous method and converts it to 3 oritentation headings.
+    		SensorManager.getOrientation(R, orientation);
+    		
+    		radHeading = String.format("%.3g%n", orientation[0]);
+    		
+    		//Sets the orientation to a text view along with the closest compass value in the
+    		//eight point compass system.
+    		direction.setText("Current heading: " + radHeading + " (" + this. EightPointHeading(orientation[0]) + ")");
+    		}
+    	
+    	
+    	//Method that translates the orientation into a compass heading.
+    	public String EightPointHeading(float orientation){
+    	    	
+    	    	String eightPointHeading = "";
+    	    	
+    	    	if(Math.abs(orientation) < Math.PI/8){
+    				eightPointHeading = "N";
+    			}
+    			
+    			else if(Math.PI/8 < orientation && 3*Math.PI/8 > orientation){
+    				eightPointHeading = "NE";
+    			}
+    			
+    			else if(3*Math.PI/8 < orientation && 5*Math.PI/8 > orientation){
+    				eightPointHeading = "E";
+    			}
+    			
+    			else if(5*Math.PI/8 < orientation && 7*Math.PI/8 > orientation){
+    				eightPointHeading = "SE";
+    			}
+    			
+    			else if(Math.abs(orientation) > 7*Math.PI/8){
+    				eightPointHeading = "S";
+    			}
+    			
+    			else if(-5*Math.PI/8 > orientation && -7*Math.PI/8 < orientation){
+    				eightPointHeading = "SW";
+    			}
+    			
+    			else if(-3*Math.PI/8 > orientation && -5*Math.PI/8 < orientation){
+    				eightPointHeading = "W";
+    			}
+    			
+    			else if(-Math.PI/8 > orientation && -3*Math.PI/8 < orientation){
+    				eightPointHeading = "NW";
+    			}
+    	    	
+    			else{
+    				eightPointHeading = "unknown";
+    			}
+    	    	
+    	    	return eightPointHeading;
+    	    	
+    	    }
+    	 
+    	 
+    	
+    }
+    
+    
+    public class PositionSensor implements PositionListener{
+    	
+    	
+    	
+		@Override
+		public void originChanged(MapView source, PointF loc) {
+			source.setUserPoint(loc);
+			
+		}
+
+		@Override
+		//When a new destination is set, creates a new path between the origin and the
+		//destination. Also, creates a new set of written instructions and resets the arrival
+		//text view to blank.
+		public void destinationChanged(MapView source, PointF dest) {
+				source.setUserPath(createPath());
+				instruction.setText(((Acceleromoter) accellistener).Instructions(pathArray));
+				arrived.setText("");
+			
+		}
+		
+		//Method that creates the path and holds the pathfinding algorithim.
+		//Uses the intersection finding method to look for walls and then deviates from them
+		//in order to move towards the destination point.
+		public List<PointF> createPath(){
+			
+			
+			List<PointF> path = new ArrayList<PointF>();
+	    	PointF currentpoint = mapView.getOriginPoint();
+	    	PointF dest = mapView.getDestinationPoint();
+	    	PointF pointtop = null;
+	    	PointF pointbottom = null;
+	    	List<InterceptPoint> intercept = map.calculateIntersections(currentpoint,dest);
+	    	LineSegment line = null;
+	    	
+			if (mapView.getOriginPoint()!=mapView.getDestinationPoint()){
+				
+				path.add(mapView.getOriginPoint());
+				while(intercept.size() != 0){
+					
+					line=intercept.get(0).getLine();
+					
+					if (currentpoint.x<dest.x){
+						pointtop=line.start;
+						pointbottom=line.end;
+					}
+					else{
+						pointtop=line.end;
+						pointbottom=line.start;
+					}
+					
+					if(currentpoint.y<(10)){
+						currentpoint = new PointF((float) (pointbottom.x), (float) (pointbottom.y+0.01));
+						
+					}
+					else{
+						currentpoint = new PointF(pointtop.x, (float) (pointtop.y-0.01));
+					}
+					
+					path.add(currentpoint);
+					intercept = map.calculateIntersections(currentpoint,dest);
+				}
+				path.add(dest);
+			}
+			pathArray = path.toArray(new PointF[path.size()]);
+			return path;
+		}
+		
+    }
+    
+    	
+}
